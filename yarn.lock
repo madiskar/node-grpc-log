@@ -32,6 +32,11 @@
     enabled "2.0.x"
     kuler "^2.0.0"
 
+"@mdkr/grpc-chain@^0.2.0":
+  version "0.2.0"
+  resolved "https://registry.npmjs.org/@mdkr/grpc-chain/-/grpc-chain-0.2.0.tgz#1e1d99f14e4abad06b1246d92420a94a8229b6d3"
+  integrity sha512-eyrAFN0NyVujTJRhqyiF4xGt5pQD0P4zjG3gCX9eWUci0gClAj89hu6FCNGqtbO0gvvNbOLEJdbuyu8kZoBdtw==
+
 "@types/bytebuffer@^5.0.40":
   version "5.0.41"
   resolved "https://registry.npmjs.org/@types/bytebuffer/-/bytebuffer-5.0.41.tgz#6850dba4d4cd2846596b4842874d5bfc01cd3db1"
