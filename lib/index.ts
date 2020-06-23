@@ -1,11 +1,19 @@
 import winston from 'winston';
 import grpc from 'grpc';
+import {
+  GenericServiceCall,
+  GenericCallHandler,
+  NextFunction,
+  ChainServerUnaryCall,
+  ChainServerWritableStream,
+  ChainServerReadableStream,
+  ChainServerDuplexStream,
+} from '@mdkr/grpc-chain';
 import * as jspb from 'google-protobuf';
-import { GenericServiceCall, GenericCallHandler, NextFunction } from '@mdkr/grpc-chain';
 
 interface CallInfo {
   message: string;
-  req_id?: number;
+  req_id?: string;
   path: string;
   call_type: 'unary' | 'client_stream' | 'server_stream' | 'bidi_stream';
 }
@@ -21,9 +29,11 @@ interface FinishMsg extends CallInfo {
   payload?: { [key: string]: unknown };
 }
 
-interface StreamMsg extends CallInfo {
+interface StreamDataMsg extends CallInfo {
   payload?: { [key: string]: unknown };
 }
+
+type StreamMsg = CallInfo;
 
 export interface CallLogConfiguration {
   omitRequestMetadata?: boolean;
@@ -55,73 +65,173 @@ const defaultOptions: LoggingOptions = {
   logConfigurations: {},
 };
 
+function omitProperty(obj: { [key: string]: unknown }, prop: string): void {
+  for (const key in obj) {
+    if (key === prop) {
+      obj[prop] = '<redacted>';
+    } else if (typeof obj[prop] === 'object') {
+      omitProperty(obj[prop] as { [key: string]: unknown }, prop);
+    }
+  }
+}
+
 export { defaultLogFormat, defaultLogger, defaultOptions };
 
 export default function (opts = defaultOptions): GenericCallHandler {
   return (call: GenericServiceCall, next: NextFunction) => {
     const logger = opts.logger;
+    const logConf: CallLogConfiguration | undefined = opts.logConfigurations[call.ctx.method.path];
 
-    // try {
-    //   const startTime = Date.now();
+    try {
+      const startTime = Date.now();
 
-    //   const startMsg: StartMsg = {
-    //     message: 'Start handling call',
-    //     path: call.ctx.method.path,
-    //   };
-    //   if (!minimal) {
-    //     startMsg.metadata = call.metadata;
+      // Collect basic call info
+      const callInfo: CallInfo = {
+        path: call.ctx.method.path,
+        call_type: 'unary',
+        message: '',
+      };
 
-    //     if (!ctx.method.requestStream) {
-    //       startMsg.payload = (((call as grpc.ServerUnaryCall<T> | grpc.ServerWritableStream<T>)
-    //         .request as unknown) as jspb.Message).toObject();
-    //     }
-    //   }
+      // If the 'req-id' middleware is used, attach the generated
+      // id to our log message
+      if (call.ctx.locals.reqId) {
+        callInfo.req_id = call.ctx.locals.reqId as string;
+      }
 
-    //   logger.info(startMsg);
+      if (call.ctx.method.requestStream && call.ctx.method.responseStream) {
+        callInfo.call_type = 'bidi_stream';
+      } else if (call.ctx.method.requestStream) {
+        callInfo.call_type = 'client_stream';
+      } else if (call.ctx.method.responseStream) {
+        callInfo.call_type = 'server_stream';
+      }
 
-    //   if (ctx.method.requestStream) {
-    //     call.on('data', (msg) => {
-    //       const streamRecvMsg: StreamRecvMsg = {
-    //         message: 'Received message from peer via stream',
-    //         requestId: ctx.reqId,
-    //         path: ctx.method.path,
-    //       };
-    //       if (!minimal && msg) {
-    //         streamRecvMsg.payload = msg.toObject();
-    //       }
-    //       logger.info(streamRecvMsg);
-    //     });
-    //   }
+      const startMsg: StartMsg = {
+        ...callInfo,
+        message: 'Start call handling',
+      };
 
-    //   ctx.onStreamMsgOut((pbMsg) => {
-    //     const msg: StreamSendMsg = {
-    //       message: 'Sent message to peer via stream',
-    //       requestId: ctx.reqId || '',
-    //       path: ctx.method.path || '',
-    //     };
-    //     if (!minimal) {
-    //       msg.payload = pbMsg.toObject();
-    //     }
-    //     logger.info(msg);
-    //   });
+      if (!logConf || !logConf.omitRequestMetadata) {
+        startMsg.metadata = call.core.metadata;
+      }
 
-    //   ctx.onCallFinish(() => {
-    //     const finishMsg: FinishMsg = {
-    //       message: 'Call handling finished',
-    //       requestId: ctx.reqId,
-    //       path: ctx.method.path,
-    //       code: ctx.respCode,
-    //       duration: Date.now() - startTime + 'ms',
-    //     };
-    //     if (!minimal && ctx.respPayload) {
-    //       finishMsg.payload = ctx.respPayload.toObject();
-    //     }
-    //     logger.info(finishMsg);
-    //   });
-    // } catch (err) {
-    //   logger.error('Call logging failed');
-    //   logger.error(err.toString());
-    // }
+      if (!call.ctx.method.requestStream) {
+        call = call as
+          | ChainServerUnaryCall<jspb.Message, jspb.Message>
+          | ChainServerWritableStream<jspb.Message, jspb.Message>;
+
+        if (!logConf || !logConf.omitUnaryRequestPayload) {
+          const payload = call.req.toObject();
+          if (logConf && logConf.omitUnaryRequestPayloadKeys) {
+            for (const prop of logConf.omitUnaryRequestPayloadKeys) {
+              omitProperty(payload, prop);
+            }
+          }
+          startMsg.payload = payload;
+        }
+      }
+
+      if (!call.ctx.method.responseStream) {
+        call = call as
+          | ChainServerReadableStream<jspb.Message, jspb.Message>
+          | ChainServerUnaryCall<jspb.Message, jspb.Message>;
+
+        call.onUnaryDataSent((payloadPb) => {
+          const finishMsg: FinishMsg = {
+            ...callInfo,
+            message: 'Call handling finished',
+            took_ms: startTime - Date.now(),
+          };
+
+          if (!logConf || !logConf.omitUnaryResponsePayload) {
+            const payload = payloadPb.toObject();
+            if (logConf && logConf.omitUnaryResponsePayloadKeys) {
+              for (const prop of logConf.omitUnaryResponsePayloadKeys) {
+                omitProperty(payload, prop);
+              }
+            }
+            finishMsg.payload = payload;
+          }
+
+          logger.info(finishMsg);
+        });
+      }
+
+      if (call.ctx.method.requestStream) {
+        call = call as
+          | ChainServerReadableStream<jspb.Message, jspb.Message>
+          | ChainServerDuplexStream<jspb.Message, jspb.Message>;
+
+        call.onInStreamEnded(() => {
+          const msg: StreamMsg = {
+            ...callInfo,
+            message: 'Inbound stream has ended',
+          };
+          logger.info(msg);
+        });
+
+        call.onMsgIn((payloadPb, nextGate) => {
+          nextGate();
+
+          const streamMsg: StreamDataMsg = {
+            ...callInfo,
+            message: 'Received data from peer via stream',
+          };
+
+          if (!logConf || !logConf.omitStreamInMsgPayload) {
+            const payload = payloadPb.toObject();
+            if (logConf && logConf.omitStreamInMsgPayloadKeys) {
+              for (const prop of logConf.omitStreamInMsgPayloadKeys) {
+                omitProperty(payload, prop);
+              }
+            }
+            streamMsg.payload = payload;
+          }
+
+          logger.info(streamMsg);
+        });
+      }
+
+      if (call.ctx.method.responseStream) {
+        call = call as
+          | ChainServerWritableStream<jspb.Message, jspb.Message>
+          | ChainServerDuplexStream<jspb.Message, jspb.Message>;
+
+        call.onOutStreamEnded(() => {
+          const msg: StreamMsg = {
+            ...callInfo,
+            message: 'Outbound stream has ended',
+          };
+          logger.info(msg);
+        });
+
+        call.onMsgOut((payloadPb, nextGate) => {
+          nextGate();
+
+          const streamMsg: StreamDataMsg = {
+            ...callInfo,
+            message: 'Sending data to peer via stream',
+          };
+
+          if (!logConf || !logConf.omitStreamOutMsgPayload) {
+            const payload = payloadPb.toObject();
+            if (logConf && logConf.omitStreamOutMsgPayloadKeys) {
+              for (const prop of logConf.omitStreamOutMsgPayloadKeys) {
+                omitProperty(payload, prop);
+              }
+            }
+            streamMsg.payload = payload;
+          }
+
+          logger.info(streamMsg);
+        });
+      }
+
+      logger.info(startMsg);
+    } catch (err) {
+      logger.error('Call logging failed');
+      logger.error(err.toString());
+    }
 
     next();
   };
