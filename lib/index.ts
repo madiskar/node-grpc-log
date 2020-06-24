@@ -139,7 +139,7 @@ export default function (opts = defaultOptions): GenericCallHandler {
         const finishMsg: FinishMsg = {
           ...callInfo,
           message: 'Call handling finished',
-          took_ms: startTime - Date.now(),
+          took_ms: Date.now() - startTime,
         };
 
         if (!logConf || !logConf.omitUnaryResponsePayload) {
