@@ -3,7 +3,7 @@ import grpc from 'grpc';
 import {
   GenericServiceCall,
   GenericCallHandler,
-  NextFunction,
+  ReadyFunction,
   ChainServerUnaryCall,
   ChainServerWritableStream,
   ChainServerReadableStream,
@@ -78,7 +78,7 @@ function omitProperty(obj: { [key: string]: unknown }, prop: string): void {
 export { defaultLogFormat, defaultLogger, defaultOptions };
 
 export default function (opts = defaultOptions): GenericCallHandler {
-  return (call: GenericServiceCall, next: NextFunction) => {
+  return (call: GenericServiceCall, ready: ReadyFunction) => {
     const logger = opts.logger;
     const logConf: CallLogConfiguration | undefined = opts.logConfigurations[call.ctx.method.path];
 
@@ -169,8 +169,8 @@ export default function (opts = defaultOptions): GenericCallHandler {
         logger.info(msg);
       });
 
-      call.onMsgIn((payloadPb, nextGate) => {
-        nextGate();
+      call.onMsgIn((payloadPb, next) => {
+        next();
 
         const streamMsg: StreamDataMsg = {
           ...callInfo,
@@ -204,8 +204,8 @@ export default function (opts = defaultOptions): GenericCallHandler {
         logger.info(msg);
       });
 
-      call.onMsgOut((payloadPb, nextGate) => {
-        nextGate();
+      call.onMsgOut((payloadPb, next) => {
+        next();
 
         const streamMsg: StreamDataMsg = {
           ...callInfo,
@@ -228,6 +228,6 @@ export default function (opts = defaultOptions): GenericCallHandler {
 
     logger.info(startMsg);
 
-    next();
+    ready();
   };
 }
