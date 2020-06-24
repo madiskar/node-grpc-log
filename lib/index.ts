@@ -48,7 +48,7 @@ export interface CallLogConfiguration {
 }
 
 export interface LoggingOptions {
-  logger: winston.Logger<winston.DefaulLevels>;
+  logger: winston.Logger;
   logConfigurations: { [path: string]: CallLogConfiguration };
 }
 
