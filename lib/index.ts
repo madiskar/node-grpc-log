@@ -27,13 +27,16 @@ interface FinishMsg extends CallInfo {
   took_ms: number;
   code?: grpc.status;
   payload?: { [key: string]: unknown };
+  error?: grpc.ServiceError;
 }
 
 interface StreamDataMsg extends CallInfo {
   payload?: { [key: string]: unknown };
 }
 
-type StreamMsg = CallInfo;
+interface StreamStatusMsg extends CallInfo {
+  error?: grpc.ServiceError;
+}
 
 export interface CallLogConfiguration {
   omitRequestMetadata?: boolean;
@@ -135,21 +138,26 @@ export default function (opts = defaultOptions): GenericCallHandler {
         | ChainServerReadableStream<jspb.Message, jspb.Message>
         | ChainServerUnaryCall<jspb.Message, jspb.Message>;
 
-      call.onUnaryDataSent((payloadPb) => {
+      call.onUnaryResponseSent((err, payloadPb) => {
         const finishMsg: FinishMsg = {
           ...callInfo,
           message: 'Call handling finished',
           took_ms: Date.now() - startTime,
         };
 
-        if (!logConf || !logConf.omitUnaryResponsePayload) {
-          const payload = payloadPb.toObject();
-          if (logConf && logConf.omitUnaryResponsePayloadKeys) {
-            for (const prop of logConf.omitUnaryResponsePayloadKeys) {
-              omitProperty(payload, prop);
+        if (err) {
+          finishMsg.message = finishMsg.message + ` with service error`;
+          finishMsg.error = err;
+        } else if (payloadPb) {
+          if (!logConf || !logConf.omitUnaryResponsePayload) {
+            const payload = payloadPb.toObject();
+            if (logConf && logConf.omitUnaryResponsePayloadKeys) {
+              for (const prop of logConf.omitUnaryResponsePayloadKeys) {
+                omitProperty(payload, prop);
+              }
             }
+            finishMsg.payload = payload;
           }
-          finishMsg.payload = payload;
         }
 
         logger.info(finishMsg);
@@ -161,11 +169,15 @@ export default function (opts = defaultOptions): GenericCallHandler {
         | ChainServerReadableStream<jspb.Message, jspb.Message>
         | ChainServerDuplexStream<jspb.Message, jspb.Message>;
 
-      call.onInStreamEnded(() => {
-        const msg: StreamMsg = {
+      call.onInStreamEnded((err) => {
+        const msg: StreamStatusMsg = {
           ...callInfo,
           message: 'Inbound stream has ended',
         };
+        if (err) {
+          msg.message = msg.message + ` with service error`;
+          msg.error = err;
+        }
         logger.info(msg);
       });
 
@@ -196,11 +208,15 @@ export default function (opts = defaultOptions): GenericCallHandler {
         | ChainServerWritableStream<jspb.Message, jspb.Message>
         | ChainServerDuplexStream<jspb.Message, jspb.Message>;
 
-      call.onOutStreamEnded(() => {
-        const msg: StreamMsg = {
+      call.onOutStreamEnded((err) => {
+        const msg: StreamStatusMsg = {
           ...callInfo,
           message: 'Outbound stream has ended',
         };
+        if (err) {
+          msg.message = msg.message + ` with service error`;
+          msg.error = err;
+        }
         logger.info(msg);
       });
 
